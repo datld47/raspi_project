@@ -1,0 +1,24 @@
+{
+    "serial":{
+        "port":"COM7",
+        "baudrate":115200
+    },
+    "account":[
+        {
+            "username":"dat",
+            "password":"1",
+            "role":"admin"
+        },
+        {
+            "username":"dat2",
+            "password":"1",
+            "role":"user"
+        }
+    ],
+
+    "weather":{
+        "api_key":"b5f3ea96b782f2520e492ae584654089",
+        "lat":"12.670433",
+        "long":"108.045814"
+    }
+}
