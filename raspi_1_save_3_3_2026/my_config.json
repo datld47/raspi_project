@@ -6,27 +6,15 @@
     "ad7606":{
         "ad7606_id":"AD7606_3"
     },
-    "pi":{
-        "pi_id":"pi_3"
-    },
     "server":{
         "ip":"54.66.51.43",
         "port":8080,
         "url_heartbeat":"api/ad7606/ad7606_3/heartbeat/",
-        "url_upload":"api/pi/pi_3/upload/"
+        "url_upload":"api/ad7606/ad7606_3/upload/"
     },
     "app_config":{
         "time_db_push":30,
-        "time_read_adc":0.01,
-        "time_modbus":0.1
-    },
-     "frame":{
-        "FRAME_PER_BLOCK":512,
-        "SERVER_BATCH_SIZE":1,
-        "NUM_CHANNELS":11
-    },
-    "alarm":{
-        "ALARM_LEVEL_1":10
+        "time_read_adc":0.005
     }
-    
+
 }

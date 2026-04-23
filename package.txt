@@ -1,0 +1,11 @@
+pip install onnxruntime
+pip install joblib
+pip install pandas
+pip install scikit-learn
+sudo apt-get install libzmq3-dev
+pip install pyzmq
+
+#cách ly core 3
+/boot/firmware/cmdline.txt   thêm isolcpus=3
+khởi động lại
+sudo apt install htop

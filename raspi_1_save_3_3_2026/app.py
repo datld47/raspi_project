@@ -11,7 +11,7 @@ from collections import deque
 import datetime
 from datetime import timezone
 from datetime import datetime as dt
-sys.path.append('./raspi_project/project_ad7606')
+sys.path.append('./iot_project_app/project_ad7606')
 import my_sqlite
 from my_model import AD7606_INFO,AD7606_CHANNEL,AD7606_DETAIL,SENSOR_INFO
 import connect_server
@@ -21,75 +21,56 @@ pin_sclk=11
 pin_rst=17
 pin_ca=27
 pin_busy=22
-#pin_cs=23
+pin_cs=23
 
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(pin_ca, GPIO.OUT)
 GPIO.setup(pin_rst, GPIO.OUT)
-#GPIO.setup(pin_cs, GPIO.OUT)
+GPIO.setup(pin_cs, GPIO.OUT)
 GPIO.setup(pin_busy, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 
 spi = spidev.SpiDev()
 spi.open(0, 0)  # Bus=0, Device=0 (CE0)
 
-spi.max_speed_hz = 1000000    # tuong duong 8 MHz
+spi.max_speed_hz = 8_000_000    # tuong duong 8 MHz
 spi.mode = 0                    # CPOL=0, CPHA=0
 spi.bits_per_word = 8
-spi.lsbfirst = False
+spi.lsbfirst = False   
 
-
-# #test spi
-# while True:
-#     print('bat dau test')
-#     adc_voltage = [0.0] * 8
-#     GPIO.output(pin_ca, 0)
-#     GPIO.output(pin_ca, 1)
-#     GPIO.output(pin_ca, 0)
-
-#     while (GPIO.input(pin_busy)==0):
-#         print('0')
-#         pass
-#     while(GPIO.input(pin_busy)==1):
-#         print('1')
-#         pass
-    
-#     rx_buf = spi.readbytes(16)
-#     for i in range(8):
-#         raw = (rx_buf[2*i] << 8) | rx_buf[2*i + 1]
-#         if raw & 0x8000:        # signed 16-bit
-#             raw -= 65536
-#         adc_voltage[i] = (raw/32767.0 )*10
-
-#     print(adc_voltage)
-#     time.sleep(1)
-    
-
-
-
+# ==== H�M �?C AD7606 (Gi?ng ESP32 1:1) ====
 def ad7606_read():
     adc_voltage = [0.0] * 8
-    GPIO.output(pin_ca, 0)
+
+    # 1. K�ch CONVST: CA = 1 -> 0
     GPIO.output(pin_ca, 1)
     GPIO.output(pin_ca, 0)
 
-    while (GPIO.input(pin_busy)==0):
+    # 2. �?i BUSY xu?ng
+    while GPIO.input(pin_busy) == 1:
         pass
-    while(GPIO.input(pin_busy)==1):
-        pass
-    
+
+    # 3. CS = 0
+    GPIO.output(pin_cs, 0)
+
+    # 4. �?c 16 byte y nhu rx_buf ESP32
     rx_buf = spi.readbytes(16)
 
+    # 5. CS = 1
+    GPIO.output(pin_cs, 1)
+
+    # 6. Convert d? li?u (gi?ng h?t ESP32)
     for i in range(8):
         raw = (rx_buf[2*i] << 8) | rx_buf[2*i + 1]
         if raw & 0x8000:        # signed 16-bit
             raw -= 65536
-        adc_voltage[i] = raw
+
+        adc_voltage[i] = raw / 32767.0 * 10.0
 
     return adc_voltage
 
 
 #đường dẫn file config
-PATH_MY_CONFIG='/home/dat/hoang_project/raspi_project/project_ad7606/my_config.json'
+PATH_MY_CONFIG='/home/dat/Project/iot_project_app/project_ad7606/my_config.json'
 
 #biến chứa kết quả đọc từ file config
 MY_CONFIG=None
@@ -172,6 +153,15 @@ def get_now_timestamp():
     timestamp =  dt.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]+'Z'
     return timestamp
 
+def decode_ad7606_data(data):
+    adc_voltage = []
+    for i in range(8):
+        # ghép 2 byte thành 16-bit signed
+        raw = int.from_bytes(data[2*i:2*i+2], byteorder='big', signed=True)
+        # chuyển sang voltage ±10V
+        voltage = raw / 32768.0 * 10.0
+        adc_voltage.append(voltage)
+    return adc_voltage
 
 #thread lắng nghe nhận dữ liệu
 # def rx_loop(ser):
