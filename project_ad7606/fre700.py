@@ -47,6 +47,30 @@ def fre700_decode_data(raw_data_16,factor=factor_choose):
     print('loi factor')
     return None
 
+
+
+
+# def find_modbus_port(keyword="USB"):
+#     ports = serial.tools.list_ports.comports()
+#     for port in ports:
+#         if keyword.lower() in port.description.lower():
+#             print(f"Đã tìm thấy thiết bị tại: {port.device}")
+#             return port.device
+#     return None
+# port=find_modbus_port()
+# if port==None:
+#     error_handler('loi ket noi modbus -- vui long kiem tra phan cung')
+    
+# print(f'port={port}')
+# client_modbus=init_modbus_client(port=port)
+# try:
+#     client_modbus.connect()
+#     print('ket noi modbus thanh cong')
+# except:
+#     error_handler('loi ket noi modbus -- vui long kiem tra phan cung')
+
+
+
 if __name__ == "__main__":
     client=init_modbus_client()        
     try:

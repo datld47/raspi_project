@@ -17,13 +17,41 @@ from datetime import datetime as dt
 from my_model import AD7606_DETAIL,AD7606_FRE700
 import connect_server
 import random
-from fre700 import init_modbus_client,fre70_read_raw_data_continue,fre700_decode_data 
+#from fre700 import init_modbus_client,fre70_read_raw_data_continue,fre700_decode_data 
+from plc import init_tcp_modbus_client,plc_decode_data,plc_read_data 
 import serial.tools.list_ports
 
 def error_handler(err):
-    print(err)
+    print(f'[ERROR SYSTEM]:{err}')
     while True:
         pass
+
+
+#đường dẫn file config
+PATH_MY_CONFIG='/home/dat/hoang_project/raspi_project/project_ad7606/my_config.json'
+#biến chứa kết quả đọc từ file config
+MY_CONFIG=None
+try:
+    with open(PATH_MY_CONFIG, "r", encoding="utf-8") as f:
+        MY_CONFIG= json.load(f)
+except json.JSONDecodeError:
+        print(f"lỗi cú pháp JSON")
+        sys.exit(1)
+
+PI_ID=MY_CONFIG['pi']['pi_id']
+AD7606_ID=MY_CONFIG['ad7606']['ad7606_id']
+TIME_DB_PUSH=MY_CONFIG['app_config']['time_db_push']
+TIME_READ_ADC=MY_CONFIG['app_config']['time_read_adc']
+TIME_READ_MODBUS= MY_CONFIG['app_config']['time_modbus']
+FRAME_PER_BLOCK = MY_CONFIG['frame']['FRAME_PER_BLOCK']
+SERVER_BATCH_SIZE = MY_CONFIG['frame']['SERVER_BATCH_SIZE']
+NUM_CHANNELS=MY_CONFIG['frame']['NUM_CHANNELS']
+IP_PLC=MY_CONFIG['plc']['IP']
+PORT_PLC=MY_CONFIG['plc']['PORT']
+plc_alarm_delay= MY_CONFIG['plc']['ALARM_LEVEL_1']
+
+url_heartbeat=''
+url_upload=''
 
 pin_miso=9
 pin_sclk=11
@@ -56,46 +84,23 @@ time.sleep(0.01)
 
 #================cau hinh modbus====================#
 data_modbus=[]
-def find_modbus_port(keyword="USB"):
-    ports = serial.tools.list_ports.comports()
-    for port in ports:
-        if keyword.lower() in port.description.lower():
-            print(f"Đã tìm thấy thiết bị tại: {port.device}")
-            return port.device
-    return None
-port=find_modbus_port()
-if port==None:
-    error_handler('loi ket noi modbus -- vui long kiem tra phan cung')
-    
-print(f'port={port}')
-client_modbus=init_modbus_client(port=port)
-try:
-    client_modbus.connect()
-    print('ket noi modbus thanh cong')
-except:
-    error_handler('loi ket noi modbus -- vui long kiem tra phan cung')
+client_modbus=init_tcp_modbus_client(IP_PLC,PORT_PLC)
+time_sleep_for_client=0
+while True:
+    try:
+        client_modbus.connect()
+        print('ket noi modbus thanh cong')
+        break
+    except:
+       print('loi connect plc')
+    # cho tang dan
+    time_sleep_for_client+=5
+    print(f'ket noi lai sau {time_sleep_for_client} s')
+    if(time_sleep_for_client>60):
+        time_sleep_for_client=60
+    time.sleep(time_sleep_for_client)
+
 #============================================================#
-
-    
-#đường dẫn file config
-PATH_MY_CONFIG='/home/dat/hoang_project/raspi_project/project_ad7606/my_config.json'
-#biến chứa kết quả đọc từ file config
-MY_CONFIG=None
-# khai báo queue phục vụ giao tiếp đa luồng
-#rx_queue = queue.Queue()
-#tx_queue=queue.Queue()
-url_heartbeat=''
-url_upload=''
-AD7606_ID=''
-PI_ID=''
-TIME_READ_ADC=0.01
-TIME_DB_PUSH=5
-TIME_READ_MODBUS=0.1
-
-# --- 1. CẤU HÌNH HỆ THỐNG ---
-NUM_CHANNELS = 8
-FRAME_PER_BLOCK = 512
-SERVER_BATCH_SIZE = 6  # Gom 6 blocks gửi server
 
 # --- 2. BIẾN TOÀN CỤC & HÀNG ĐỢI ---
 rx_1 = queue.Queue(maxsize=1000)
@@ -103,7 +108,7 @@ server_queue = queue.Queue(maxsize=50)
 error_queue = queue.Queue()
 plc_queue = queue.Queue(maxsize=10)
 fre700_lock=threading.Lock()
-plc_alarm_delay=9
+
 
 # Trạng thái của App 2 (Bắt đầu là False, chờ App 2 lên tiếng)
 ai_is_online = False 
@@ -179,7 +184,7 @@ def thread_2_3_manager():
             with fre700_lock:
                 data_tmp=data_modbus
             current_block.extend(data_tmp)
-            data_tmp_decode=fre700_decode_data(data_tmp)
+            data_tmp_decode=plc_decode_data(data_tmp)
             buffer_write.append(AD7606_FRE700(0,AD7606_ID,record,get_now_timestamp(),data_tmp_decode))
             frame_count += 1
             if frame_count >= FRAME_PER_BLOCK:
@@ -319,15 +324,14 @@ def thread_7_modbus():
         print("[L7] thu thập modbus")
         while True:
             start_tick = time.perf_counter()
-            data=fre70_read_raw_data_continue(client_modbus)
+            data=plc_read_data(client_modbus)
             with fre700_lock:
                 data_modbus=data
             elapsed = time.perf_counter() - start_tick
             time.sleep(max(0, TIME_READ_MODBUS - elapsed))
     except Exception as e:
+        print(e)
         error_queue.put(("DAQ_CORE (Luồng 1)", str(e)))
-
-
 
 
 #========================TESST ADC ===========================
@@ -353,15 +357,13 @@ if False:
 #=================================================================
 
 
-
 #========================TESST MODBUS ===========================
 if False:
     while True:
-        start_tick = time.perf_counter()
-        data=fre70_read_raw_data_continue(client_modbus)
+        data=plc_read_data(client_modbus)
         print(data)
-        elapsed = time.perf_counter() - start_tick
-        time.sleep(max(0, TIME_READ_MODBUS - elapsed))
+        print(plc_decode_data(data))
+        time.sleep(5)
         
 #=================================================================
 
@@ -369,33 +371,21 @@ if False:
 
 # =========================Chương trình bắt đầu chạy =============================-
 if __name__ == "__main__":
-    try:
-        with open(PATH_MY_CONFIG, "r", encoding="utf-8") as f:
-            MY_CONFIG= json.load(f)
-    except json.JSONDecodeError:
-        print(f"lỗi cú pháp JSON")
-        sys.exit(1)
-
+  
     url_heartbeat=connect_server.create_url_heartbeat(MY_CONFIG['server'])
     url_upload=connect_server.create_url_upload(MY_CONFIG['server'])
-    PI_ID=MY_CONFIG['pi']['pi_id']
-    AD7606_ID=MY_CONFIG['ad7606']['ad7606_id']
-    TIME_DB_PUSH=MY_CONFIG['app_config']['time_db_push']
-    TIME_READ_ADC=MY_CONFIG['app_config']['time_read_adc']
-    TIME_READ_MODBUS= MY_CONFIG['app_config']['time_modbus']
-    FRAME_PER_BLOCK = MY_CONFIG['frame']['FRAME_PER_BLOCK']
-    SERVER_BATCH_SIZE = MY_CONFIG['frame']['SERVER_BATCH_SIZE']
-    NUM_CHANNELS=MY_CONFIG['frame']['NUM_CHANNELS']
-    plc_alarm_delay= MY_CONFIG['alarm']['ALARM_LEVEL_1']
+    
     print(f'=====Thông tin cấu hình=====\n-PI_ID:{PI_ID}\n-AD7606_ID:{AD7606_ID}\n-TIME_READ_ADC:{TIME_READ_ADC}\n-TIME_READ_MODBUS:{TIME_READ_MODBUS}\n-FRAME_PER_BLOCK:{FRAME_PER_BLOCK}\n-SERVER_BATCH_SIZE:{SERVER_BATCH_SIZE}\nNUM_CHANNELS={NUM_CHANNELS}\n-url_heartbeat:{url_heartbeat}\n-url_upload:{url_upload}\nTime PLC delay:{plc_alarm_delay}\n=========================')
     
-    
-    data_modbus=fre70_read_raw_data_continue(client_modbus)
-    if data_modbus==None:
-        error_handler('loi doc modbus')
-    print(f'[modbus]:{data_modbus}')
-    print(f'[modbus decode]:{fre700_decode_data(data_modbus)}')
-       
+    try:
+        data_modbus=plc_read_data(client_modbus)
+        if data_modbus==None:
+            error_handler('loi doc modbus')
+        print(f'[modbus]:{data_modbus}')
+        print(f'[modbus decode]:{plc_decode_data(data_modbus)}')
+    except:
+          error_handler('loi doc modbus')
+        
     workers = [
         threading.Thread(target=thread_1_daq, daemon=True),
         threading.Thread(target=thread_2_3_manager, daemon=True),
