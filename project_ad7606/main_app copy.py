@@ -12,6 +12,7 @@ from collections import deque
 import datetime
 from datetime import timezone
 from datetime import datetime as dt
+
 #import my_sqlite
 from my_model import AD7606_DETAIL,AD7606_FRE700
 import connect_server
@@ -19,20 +20,13 @@ import random
 #from fre700 import init_modbus_client,fre70_read_raw_data_continue,fre700_decode_data 
 from plc import init_tcp_modbus_client,plc_decode_data,plc_read_data 
 import serial.tools.list_ports
-import asyncio
-import signal
-from bleak import BleakScanner, BleakClient
-import subprocess
-
-
-stop_event = threading.Event()
 
 def error_handler(err):
     print(f'[ERROR SYSTEM]:{err}')
     while True:
         pass
-
-
+    
+    
 #đường dẫn file config
 PATH_MY_CONFIG='/home/dat/hoang_project/raspi_project/project_ad7606/my_config.json'
 #biến chứa kết quả đọc từ file config
@@ -55,9 +49,6 @@ NUM_CHANNELS=MY_CONFIG['frame']['NUM_CHANNELS']
 IP_PLC=MY_CONFIG['plc']['IP']
 PORT_PLC=MY_CONFIG['plc']['PORT']
 plc_alarm_delay= MY_CONFIG['plc']['ALARM_LEVEL_1']
-SERVICE_UUID = MY_CONFIG['ble']['SERVICE_UUID'] 
-CHAR_UUID = MY_CONFIG['ble']['CHAR_UUID']
-ESP_LIST=MY_CONFIG['ble']['ESP_LIST']
 
 url_heartbeat=''
 url_upload=''
@@ -68,7 +59,6 @@ pin_rst=17
 pin_ca=27
 pin_busy=22
 pin_alarm_plc =12
-pin_alarm_ble=16
 
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(pin_ca, GPIO.OUT)
@@ -76,7 +66,6 @@ GPIO.setup(pin_rst, GPIO.OUT)
 #GPIO.setup(pin_cs, GPIO.OUT)
 GPIO.setup(pin_busy, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 GPIO.setup(pin_alarm_plc, GPIO.OUT)
-GPIO.setup(pin_alarm_ble, GPIO.OUT)
 
 spi = spidev.SpiDev()
 spi.open(0, 0)  # Bus=0, Device=0 (CE0)
@@ -163,7 +152,7 @@ def thread_1_daq():
     global error_queue
     try:
         print("[L1] Đang thu thập dữ liệu 8 kênh (10ms)...")
-        while not stop_event.is_set():
+        while True:
             start_tick = time.perf_counter()
             rresult=ad7606_read()
             rx_1.put(rresult)
@@ -171,8 +160,6 @@ def thread_1_daq():
             time.sleep(max(0, TIME_READ_ADC - elapsed))
     except Exception as e:
         error_queue.put(("DAQ_CORE (Luồng 1)", str(e)))
-    finally:
-        print('thread_1_daq exit')
 
 # --- 5. LUỒNG 2 & 3: QUẢN LÝ BUFFER & GHI SHM ---
 def thread_2_3_manager():
@@ -186,13 +173,12 @@ def thread_2_3_manager():
     frame_count = 0
     current_block = []
     buffer_write=[]
-    global stop_event
     try:
         context = zmq.Context()
         daq_socket = context.socket(zmq.PUSH)
         daq_socket.setsockopt(zmq.SNDHWM, 50) # Chống tràn RAM (chứa tối đa 50 gói)
         daq_socket.bind("ipc:///tmp/daq_data.ipc") # Tạo cổng IPC cho App 2 c
-        while not stop_event.is_set():
+        while True:
             record = rx_1.get()
             current_block.extend(record)
             with fre700_lock:
@@ -212,12 +198,10 @@ def thread_2_3_manager():
                 current_block.clear()
                 frame_count = 0
     except Exception as e:
-        #error_queue.put(("BUFFER_MGR (Luồng 2-3)", str(e)))
-        print(e)
+        error_queue.put(("BUFFER_MGR (Luồng 2-3)", str(e)))
     finally:
         daq_socket.close()
         context.term()
-        print('thread_2_3_manager exit')
 
 # --- 6. LUỒNG 4: LẮNG NGHE ĐIỀU KHIỂN (ZMQ) ---
 def thread_4_control_listener():
@@ -233,7 +217,7 @@ def thread_4_control_listener():
         sub.connect("ipc:///tmp/ai_status.ipc")
         sub.setsockopt_string(zmq.SUBSCRIBE, "")
         print("[L4] Đang trực lệnh ZMQ...")
-        while not stop_event.is_set():
+        while True:
             msg = sub.recv_json()
             result = msg.get('result')
             if result == "APP2_ONLINE":
@@ -257,26 +241,22 @@ def thread_4_control_listener():
                 pass
             
     except Exception as e:
-        #error_queue.put(("ZMQ_CONTROL (Luồng 4)", str(e)))
-        print(e)
+        error_queue.put(("ZMQ_CONTROL (Luồng 4)", str(e)))
     finally:
         sub.close()
         context.term()
-        print('thread_4_control_listener exit')
-        
         
 # --- 7. LUỒNG 5: GỬI DỮ LIỆU LÊN SERVER ---
 def thread_5_server_uploader():
     global error_queue
     global server_queue
     global SERVER_BATCH_SIZE
-    global stop_event
     try:
         print("[L5] Luồng Server đã chạy...")
         big_batch = []
         block_count = 0
         buffer_send=[]
-        while not stop_event.is_set():
+        while True:
             block_data = server_queue.get()
             big_batch.append(block_data)
             block_count += 1
@@ -309,26 +289,32 @@ def thread_5_server_uploader():
                     buffer_send.clear()
                     block_count = 0
     except Exception as e:
-        print(e)
-        #error_queue.put(("SERVER_UPLOADER (Luồng 5)", str(e)))
-    finally:
-        print('thread_5_server_uploader')
+        error_queue.put(("SERVER_UPLOADER (Luồng 5)", str(e)))
     
 def thread_6_plc_control():
     print("[L-PLC] Luồng điều khiển Alarm PLC đã sẵn sàng (Trễ 2s)...")
+    flag_alarm=0
+    alarm_until = 0
     global plc_alarm_delay
-    try:
-        while not stop_event.is_set():
-       
+    while True:
+        try:
             # Chờ lệnh (ví dụ: "TRIGGER_ALARM")
             cmd = plc_queue.get() 
-            if cmd == "TRIGGER_ALARM":  
-                print('bật alarm')
-                GPIO.output(pin_alarm_plc,1)
-    except Exception as e:
-        print(f"Lỗi luồng PLC: {e}")
-    finally:
-        print('thread_6_plc_control exit')
+            if cmd == "TRIGGER_ALARM":
+                if flag_alarm==0:
+                    flag_alarm=1
+                    print('bật alarm')
+                    GPIO.output(pin_alarm_plc,1)
+                    alarm_until=time.time()+plc_alarm_delay
+            
+            if flag_alarm==1:
+                if time.time() > alarm_until:
+                    flag_alarm=0
+                    print('tắt alarm')
+                    
+            plc_queue.task_done()
+        except Exception as e:
+            print(f"Lỗi luồng PLC: {e}")
 
 def thread_7_modbus():
     global data_modbus
@@ -336,7 +322,7 @@ def thread_7_modbus():
     data=[]
     try:
         print("[L7] thu thập modbus")
-        while  not stop_event.is_set():
+        while True:
             start_tick = time.perf_counter()
             data=plc_read_data(client_modbus)
             with fre700_lock:
@@ -345,129 +331,7 @@ def thread_7_modbus():
             time.sleep(max(0, TIME_READ_MODBUS - elapsed))
     except Exception as e:
         print(e)
-        #error_queue.put(("DAQ_CORE (Luồng 1)", str(e)))
-    finally:
-        print('thread_7_modbus exit')
-        
-
-#================luong 8: bluetooth ==================
-
-# =========================================================
-# BLE CONFIG
-# =========================================================
-
-connected_esps = set()
-
-
-
-def signal_handler(sig, frame):
-    print("\n[CTRL+C]")
-    stop_event.set()
-
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-
-def check_bluetooth_status():
-    """Kiểm tra xem Bluetooth có đang bật hay không."""
-    try:
-        # Chạy lệnh 'bluetoothctl show' và lấy kết quả trả về
-        result = subprocess.run(['bluetoothctl', 'show'], capture_output=True, text=True)
-        if "Powered: yes" in result.stdout:
-            return True
-        return False
-    except Exception as e:
-        print(f"Lỗi khi kiểm tra trạng thái Bluetooth: {e}")
-        return False
-
-def turn_on_bluetooth():
-    """Bật Bluetooth bằng lệnh hệ thống."""
-    try:
-        print("Đang bật Bluetooth...")
-        # Lệnh 1: Đảm bảo Bluetooth không bị khóa mềm bởi hệ điều hành (yêu cầu quyền sudo nếu cần)
-        subprocess.run(['sudo', 'rfkill', 'unblock', 'bluetooth'], check=True)
-        # Lệnh 2: Bật nguồn adapter Bluetooth
-        subprocess.run(['bluetoothctl', 'power', 'on'], check=True, capture_output=True)
-        print("✅ Đã bật Bluetooth thành công!")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Lỗi: Không thể bật Bluetooth thông qua subprocess: {e}")
-        return False
-
-def handle_notification(sender: int, data: bytearray):
-
-    try:
-        text = data.decode("utf-8")
-        payload = json.loads(text)
-        print(payload)
-        status=payload.get('status',None)
-        if status is None:
-            return
-        if status==True:
-            print('phat hien nga')
-            GPIO.output(pin_alarm_ble,1)
-        else:
-            GPIO.output(pin_alarm_ble,0)
-            
-        # do something next
-    except Exception as e:
-        print("[BLE NOTIFY ERROR]", e)
-
-async def connect_esp(device):
-    """Hàm quản lý kết nối độc lập cho từng thiết bị"""
-    name = device.name
-    address = device.address
-    connected_esps.add(name)
-    client = BleakClient(device)
-    
-    try:
-        await client.connect()
-        print(f"[CONNECT ESP] {name} ({address}) connected!")
-        await client.start_notify(CHAR_UUID, handle_notification)
-        while not stop_event.is_set() and client.is_connected:
-            await asyncio.sleep(1)
-    
-    except Exception as err:
-        print(f'[CONNECT ESP] {name} except: {err}')
-    
-    if client.is_connected:
-        await client.stop_notify(CHAR_UUID)
-        await client.disconnect()
-        
-    if name in connected_esps:
-        print(f"[CONNECT ESP] {name} remove")
-        connected_esps.remove(name)
-    print(f"[CONNECT ESP] {name} exit")
-
-async def ble_main():
-    is_on = check_bluetooth_status()
-    if not is_on:
-        print("Bluetooth hiện đang tắt.")
-        success = turn_on_bluetooth()
-        if not success:
-            print("Dừng chương trình vì phần cứng Bluetooth không sẵn sàng.")
-            return
-        
-    active_tasks = set()
-    while not stop_event.is_set():
-        if len(connected_esps) < len(ESP_LIST):
-            print(f"[BLE] Đang quét... (Đã kết nối: {list(connected_esps)})")
-            devices = await BleakScanner.discover(timeout=5)
-            for d in devices:
-                if d.name in ESP_LIST and d.name not in connected_esps:
-                    print(f"[SCAN] Tìm thấy thiết bị mới: {d.address} | {d.name}")
-                    task = asyncio.create_task(connect_esp(d))
-                    active_tasks.add(task)
-                    task.add_done_callback(active_tasks.discard)
-        await asyncio.sleep(2)
-    if active_tasks:
-        await asyncio.gather(*active_tasks, return_exceptions=True)
-    print('exit ble_main')
-
-def thread_8_ble():
-    print("[BLE THREAD] started")
-    asyncio.run(ble_main())
-    print('exit ble_thread')
-
+        error_queue.put(("DAQ_CORE (Luồng 1)", str(e)))
 
 
 #========================TESST ADC ===========================
@@ -504,13 +368,14 @@ if False:
 #=================================================================
 
 
+
 # =========================Chương trình bắt đầu chạy =============================-
 if __name__ == "__main__":
   
     url_heartbeat=connect_server.create_url_heartbeat(MY_CONFIG['server'])
     url_upload=connect_server.create_url_upload(MY_CONFIG['server'])
     
-    print(f'=====Thông tin cấu hình=====\n-PI_ID:{PI_ID}\n-AD7606_ID:{AD7606_ID}\n-TIME_READ_ADC:{TIME_READ_ADC}\n-TIME_READ_MODBUS:{TIME_READ_MODBUS}\n-FRAME_PER_BLOCK:{FRAME_PER_BLOCK}\n-SERVER_BATCH_SIZE:{SERVER_BATCH_SIZE}\nNUM_CHANNELS={NUM_CHANNELS}\n-url_heartbeat:{url_heartbeat}\n-url_upload:{url_upload}\nTime PLC delay:{plc_alarm_delay}\nBLE_ESP:{ESP_LIST}\n======================================')
+    print(f'=====Thông tin cấu hình=====\n-PI_ID:{PI_ID}\n-AD7606_ID:{AD7606_ID}\n-TIME_READ_ADC:{TIME_READ_ADC}\n-TIME_READ_MODBUS:{TIME_READ_MODBUS}\n-FRAME_PER_BLOCK:{FRAME_PER_BLOCK}\n-SERVER_BATCH_SIZE:{SERVER_BATCH_SIZE}\nNUM_CHANNELS={NUM_CHANNELS}\n-url_heartbeat:{url_heartbeat}\n-url_upload:{url_upload}\nTime PLC delay:{plc_alarm_delay}\n=========================')
     
     try:
         data_modbus=plc_read_data(client_modbus)
@@ -528,20 +393,24 @@ if __name__ == "__main__":
         threading.Thread(target=thread_5_server_uploader, daemon=True),
         threading.Thread(target=thread_6_plc_control, daemon=True),
         threading.Thread(target=thread_7_modbus, daemon=True),
-        threading.Thread(target=thread_8_ble,daemon=True),
     ]
+
     for t in workers:
         t.start()
         
     print("\n--- APP 1: HỆ THỐNG ĐÃ KÍCH HOẠT ---")
     print("Đang chờ App 2 (AI Worker) kết nối...\n")
-    
-    while not stop_event.is_set():
-        time.sleep(1)
-        
-    print('cho giai phong tai nguyen') 
-    workers[5].join()
-    workers[6].join()
-    client_modbus.close()
-    print('giai phong ok: tam biet')
-    sys.exit(1)
+
+    try:
+        failed_thread, error_msg = error_queue.get()
+        print("\n" + "="*50)
+        print(f"!!! CRASH HỆ THỐNG PHÁT HIỆN TỪ APP 1 !!!")
+        print(f"- Nguồn lỗi: {failed_thread}")
+        print(f"- Chi tiết: {error_msg}")
+        print("="*50)
+    except KeyboardInterrupt:
+        print("\n[App 1] Tắt thủ công (Ctrl+C).")
+    finally:
+        print("[Hệ thống] Dọn dẹp RAM và dừng hoàn toàn...")
+        client_modbus.close()
+        sys.exit(1)

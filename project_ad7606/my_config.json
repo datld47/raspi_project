@@ -29,6 +29,11 @@
         "ALARM_LEVEL_1":10,
         "IP":"192.168.137.30",
         "PORT":502
+    },
+    "ble":{
+        "SERVICE_UUID":"4fafc201-1fb5-459e-8fcc-c5c9c331914b",
+        "CHAR_UUID":"beb5483e-36e1-4688-b7f5-ea07361b26a8",
+        "ESP_LIST":["BLE_ESP32_1","BLE_ESP32_2","BLE_ESP32_3"]
     }
     
 }
