@@ -97,8 +97,7 @@ class AD7606_FRE700:
     def convert_adc(self):
         self.ch1= (self.ch1/32767.0 )*25
         self.ch2= (self.ch2/32767.0 )*450-50
-        self.ch3= (self.ch3/32767.0 )*10*100*1000
-        self.ch4= (self.ch4/32767.0 )*10*100*1000
+        self.ch3= (self.ch3/32767.0 )*10
         self.ch5= (self.ch5/32767.0 )*10
         self.ch6= (self.ch6/32767.0 )*10
         self.ch7= (self.ch7/32767.0 )*10

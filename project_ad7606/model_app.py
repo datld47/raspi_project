@@ -7,6 +7,10 @@ import joblib
 import os
 import pandas as pd
 
+
+ALL_CHANELS=['CH1', 'CH2', 'CH3', 'CH4', 'CH5', 'CH6', 'CH7', 'CH8','Frequency','Current','Torque']
+SELECTED_CHANNEL=['CH1','CH2','Frequency','Current','Torque']
+
 def get_ort_session(path):
     sess_options = ort.SessionOptions()
     sess_options.log_severity_level = 3
@@ -14,7 +18,7 @@ def get_ort_session(path):
     return ort_session
 
 
-def create_channel_dataframe(raw_data, selected_channels=['CH1','CH3'],all_channels=['CH1', 'CH2', 'CH3', 'CH4', 'CH5', 'CH6', 'CH7', 'CH8']):
+def create_channel_dataframe(raw_data, selected_channels=SELECTED_CHANNEL,all_channels=ALL_CHANELS):
     try:
         df_full = pd.DataFrame(data=raw_data, columns=all_channels)
         df_selected = df_full[selected_channels].copy()
@@ -28,16 +32,20 @@ def create_channel_dataframe(raw_data, selected_channels=['CH1','CH3'],all_chann
     
 
 class ONNXTimeSeriesModel:
-    def __init__(self, ort_session, data_input, scaler_vibration, scaler_current):
+    def __init__(self, ort_session, data_input, selected_channels=SELECTED_CHANNEL, scaler=[]):
+        
+        if len(scaler) != len(selected_channels):
+            raise ValueError(
+                f"Số lượng bộ scaler ({len(scaler)}) không khớp với "
+                f"số lượng channels đã chọn ({len(selected_channels)})."
+            )
         self.ort_session = ort_session
-
         # Scale dữ liệu
-        data_input["CH1"] = scaler_vibration.transform(data_input[["CH1"]])
-        data_input["CH3"] = scaler_current.transform(data_input[["CH3"]])
-
+        for i,ch in enumerate(selected_channels):
+            data_input[ch] = scaler[i].transform(data_input[[ch]])
+            #data_input["CH3"] = scaler_current.transform(data_input[["CH3"]])
         # Convert sang numpy: (C, T)
-        self.data_input = data_input[["CH1", "CH3"]].values.T.astype(np.float32)
-
+        self.data_input = data_input[selected_channels].values.T.astype(np.float32)
         # Lấy input name động
         self.input_name = self.ort_session.get_inputs()[0].name
 

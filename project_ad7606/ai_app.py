@@ -23,10 +23,10 @@ context = None
 pub_socket = None
 pull_socket=None
 ort_session=None
-path_onnx='/home/dat/hoang_project/raspi_project/project_ad7606/2_cnn_lstm_model.onnx'
-path_combined_scalers = '/home/dat/hoang_project/raspi_project/project_ad7606/combined_scalers.pkl'
-scaler_vibration=None
-scaler_current=None
+path_onnx='/home/dat/hoang_project/raspi_project/project_ad7606/federated_cnn_lstm_v1_512.onnx'
+path_combined_scalers = '/home/dat/hoang_project/raspi_project/project_ad7606/list_scaler.pkl'
+selected_chanels=[]
+list_scaler=[]
 
 def get_now_timestamp():
     timestamp =  dt.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]+'Z'
@@ -58,8 +58,8 @@ signal.signal(signal.SIGINT, handle_sigterm)
 def setup_environment():
     global ort_session
     global context, pub_socket
-    global scaler_current
-    global scaler_vibration
+    global list_scaler
+    global selected_chanels
     
     # 1. Khóa cứng tiến trình vào Core 3 (Nhân số 4 của Pi)
     try:
@@ -76,8 +76,21 @@ def setup_environment():
         # Đọc file lên. Lúc này 'loaded_data' chính là cái Dictionary bạn đã lưu
         loaded_data = joblib.load(path_combined_scalers)
         # Phân giải (lấy) từng scaler ra để sử dụng dựa vào key (tên) đã đặt
-        scaler_vibration = loaded_data['vibration']
-        scaler_current = loaded_data['current']
+
+
+        # ================= CẤU HÌNH KÊNH Ơ ĐÂY ======================================
+
+        selected_chanels=['CH1','CH2','Frequency','Current','Torque']
+        list_scaler=[
+            loaded_data['CH1'],
+            loaded_data['CH2'],
+            loaded_data['Frequency'],
+            loaded_data['Current'],
+            loaded_data['Torque'],
+        ]
+
+        # =============================================================================
+  
     except Exception as e:
         print(f"\n[FATAL] KHỞI TẠO ORT_SESSION LOI!")
         print(f"[Chi tiết lỗi]: {e}")
@@ -121,17 +134,18 @@ if __name__ == "__main__":
             
             
             ##===============Chon so kenh va phan giai phu hop voi mo hinh===========================
-            df=create_channel_dataframe(ai_input,['CH1','CH3'])
-            df['CH1'] = (df['CH1'] / 32767.0) * 25.0
-            df['CH3'] = (df['CH3'] / 32767.0) *10*100*1000
-            ##=========================================================================================
+            df=create_channel_dataframe(ai_input,selected_chanels)
             
+            df['CH1'] = (df['CH1'] / 32767.0) * 25.0    # phân giải rung
+            df['CH2'] = (df['CH2'] / 32767.0) *450-50   # phân giải cho nhiệt độ ? phải hiệu chỉnh lại 
+            
+            ##=========================================================================================
             
             onnx_timeseries_model = ONNXTimeSeriesModel(
                 ort_session=ort_session,
                 data_input=df,
-                scaler_vibration=scaler_vibration,
-                scaler_current=scaler_current
+                selected_channels=selected_chanels,
+                scaler=list_scaler,
             )
             pred, logits=onnx_timeseries_model.predict()
             ai_result_clean = int(pred[0])
